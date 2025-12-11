@@ -67,7 +67,7 @@ namespace LogogramHelper.Windows
             var ActionName = TargetAction.Name.ExtractText();
 
             var DescriptionSheet = Plugin.DataManager.GetExcelSheet<ActionTransient>();
-            var Description = DescriptionSheet.GetRow((uint)13005).Description;
+            var Description = DescriptionSheet.GetRow(Action.Id).Description;
 
             var fontScaling = ImGui.GetFontSize() / 17;
             ImGui.PushTextWrapPos(540.0f * fontScaling);
