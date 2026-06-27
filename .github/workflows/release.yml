@@ -17,7 +17,6 @@ env:
   DOTNET_NOLOGO: "true"
   DALAMUD_HOME: ${{ github.workspace }}\dalamud
   PROJECT_PATH: LogogramHelper\LogogramHelper.csproj
-  PACKAGE_OUTPUT: LogogramHelper\bin\x64\Release\LogogramHelper
 
 jobs:
   build:
@@ -47,10 +46,10 @@ jobs:
           }
 
       - name: Restore dependencies
-        run: dotnet restore $env:PROJECT_PATH --locked-mode
+        run: dotnet restore $env:PROJECT_PATH --locked-mode -p:Platform=x64
 
       - name: Build release package
-        run: dotnet build $env:PROJECT_PATH --configuration Release --no-restore
+        run: dotnet build $env:PROJECT_PATH --configuration Release --no-restore -p:Platform=x64
 
       - name: Stage package
         id: package
@@ -59,20 +58,36 @@ jobs:
           [xml]$project = Get-Content "$env:PROJECT_PATH"
           $version = $project.Project.PropertyGroup.Version
           $artifactDir = Join-Path "$env:GITHUB_WORKSPACE" "artifacts"
-          $zipPath = Join-Path "$env:PACKAGE_OUTPUT" "latest.zip"
-          $manifestPath = Join-Path "$env:PACKAGE_OUTPUT" "LogogramHelper.json"
+          $projectDir = Split-Path -Parent (Join-Path "$env:GITHUB_WORKSPACE" "$env:PROJECT_PATH")
+          $binDir = Join-Path $projectDir "bin"
 
-          if (-not (Test-Path $zipPath)) {
-            throw "DalamudPackager did not create $zipPath."
+          if (-not (Test-Path $binDir)) {
+            throw "Build output directory was not created: $binDir"
           }
 
-          if (-not (Test-Path $manifestPath)) {
-            throw "DalamudPackager did not create $manifestPath."
+          $packages = @(
+            Get-ChildItem -Path $binDir -Recurse -Filter "latest.zip" | ForEach-Object {
+              $manifestPath = Join-Path $_.DirectoryName "LogogramHelper.json"
+              if (Test-Path $manifestPath) {
+                [PSCustomObject]@{
+                  Zip = $_.FullName
+                  Manifest = $manifestPath
+                  Modified = $_.LastWriteTimeUtc
+                }
+              }
+            }
+          )
+
+          if ($packages.Count -eq 0) {
+            Get-ChildItem -Path $binDir -Recurse | ForEach-Object { $_.FullName }
+            throw "DalamudPackager did not create latest.zip with LogogramHelper.json under $binDir."
           }
+
+          $package = $packages | Sort-Object Modified -Descending | Select-Object -First 1
 
           New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
-          Copy-Item $zipPath (Join-Path $artifactDir "LogogramHelper-$version.zip") -Force
-          Copy-Item $manifestPath (Join-Path $artifactDir "LogogramHelper.json") -Force
+          Copy-Item $package.Zip (Join-Path $artifactDir "LogogramHelper-$version.zip") -Force
+          Copy-Item $package.Manifest (Join-Path $artifactDir "LogogramHelper.json") -Force
 
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
