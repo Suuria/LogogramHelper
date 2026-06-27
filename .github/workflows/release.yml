@@ -1,0 +1,97 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "true"
+  DALAMUD_HOME: ${{ github.workspace }}\dalamud
+  PROJECT_PATH: LogogramHelper\LogogramHelper.csproj
+  PACKAGE_OUTPUT: LogogramHelper\bin\x64\Release\LogogramHelper
+
+jobs:
+  build:
+    name: Build plugin
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download Dalamud
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "$env:DALAMUD_HOME" -Force | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://goatcorp.github.io/dalamud-distrib/latest.zip" `
+            -OutFile "dalamud.zip"
+          Expand-Archive -Path "dalamud.zip" -DestinationPath "$env:DALAMUD_HOME" -Force
+
+          if (-not (Test-Path "$env:DALAMUD_HOME\Dalamud.dll")) {
+            throw "Dalamud.dll was not found in $env:DALAMUD_HOME."
+          }
+
+      - name: Restore dependencies
+        run: dotnet restore $env:PROJECT_PATH --locked-mode
+
+      - name: Build release package
+        run: dotnet build $env:PROJECT_PATH --configuration Release --no-restore
+
+      - name: Stage package
+        id: package
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content "$env:PROJECT_PATH"
+          $version = $project.Project.PropertyGroup.Version
+          $artifactDir = Join-Path "$env:GITHUB_WORKSPACE" "artifacts"
+          $zipPath = Join-Path "$env:PACKAGE_OUTPUT" "latest.zip"
+          $manifestPath = Join-Path "$env:PACKAGE_OUTPUT" "LogogramHelper.json"
+
+          if (-not (Test-Path $zipPath)) {
+            throw "DalamudPackager did not create $zipPath."
+          }
+
+          if (-not (Test-Path $manifestPath)) {
+            throw "DalamudPackager did not create $manifestPath."
+          }
+
+          New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
+          Copy-Item $zipPath (Join-Path $artifactDir "LogogramHelper-$version.zip") -Force
+          Copy-Item $manifestPath (Join-Path $artifactDir "LogogramHelper.json") -Force
+
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LogogramHelper-${{ steps.package.outputs.version }}
+          path: artifacts/*
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = Get-ChildItem -Path "artifacts" -File | ForEach-Object { $_.FullName }
+
+          gh release create "${{ github.ref_name }}" `
+            $assets `
+            --title "Logogram Helper ${{ github.ref_name }}" `
+            --generate-notes `
+            --latest
